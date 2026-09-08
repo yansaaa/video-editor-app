@@ -1,0 +1,94 @@
+.timeline {
+  background-color: #222;
+  border: 1px solid #333;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.timeline-header {
+  padding: 0.75rem;
+  background-color: #1a1a1a;
+  border-bottom: 1px solid #333;
+}
+
+.timeline-header h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.timeline-container {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  position: relative;
+}
+
+.timeline-ruler {
+  display: flex;
+  height: 30px;
+  background-color: #1a1a1a;
+  border-bottom: 1px solid #333;
+  position: sticky;
+  top: 0;
+}
+
+.timeline-marker {
+  flex: 1;
+  min-width: 100px;
+  text-align: center;
+  font-size: 0.7rem;
+  color: #666;
+  border-right: 1px solid #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.timeline-track {
+  position: relative;
+  height: 100px;
+  background: linear-gradient(to bottom, #1a1a1a, #222);
+  cursor: pointer;
+}
+
+.clip-item {
+  position: absolute;
+  height: 70px;
+  top: 15px;
+  background: linear-gradient(to bottom, #4a90e2, #2a5ab3);
+  border: 1px solid #1a5ec6;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  user-select: none;
+}
+
+.clip-item:hover {
+  background: linear-gradient(to bottom, #5a9ff2, #3a6ac3);
+}
+
+.clip-label {
+  font-size: 0.8rem;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 0.5rem;
+}
+
+.playhead {
+  position: absolute;
+  width: 2px;
+  height: 100%;
+  background-color: #ff0000;
+  top: 0;
+  z-index: 10;
+  box-shadow: 0 0 5px rgba(255, 0, 0, 0.5);
+}

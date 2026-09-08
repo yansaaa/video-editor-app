@@ -1,0 +1,41 @@
+.video-player {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: #000;
+}
+
+.video-element {
+  flex: 1;
+  width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  background-color: #000;
+}
+
+.video-controls {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background-color: #1a1a1a;
+  border-top: 1px solid #333;
+}
+
+.control-button {
+  padding: 0.5rem 1rem;
+  background-color: #4a90e2;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background-color 0.2s;
+}
+
+.control-button:hover {
+  background-color: #5a9ff2;
+}
+
+.control-button:active {
+  background-color: #3a7ac3;
+}

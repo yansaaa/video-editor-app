@@ -1,212 +1,195 @@
-import { useEffect, useState } from 'react';
+import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from 'react';
 
-type OverlayPreset = {
-  id: number;
-  label: string;
-  text: string;
-  color: string;
-  fontSize: number;
-  opacity: number;
-  x: number;
-  y: number;
-  align: 'left' | 'center' | 'right';
+type Clip = {
+  id: string;
+  name: string;
+  url: string;
+  duration: number;
+  trimStart: number;
+  trimEnd: number;
 };
 
-const defaultPreset: OverlayPreset = {
-  id: 1,
-  label: 'Launch Title',
-  text: 'Launch Day',
-  color: '#ffffff',
-  fontSize: 46,
-  opacity: 0.95,
-  x: 50,
-  y: 56,
-  align: 'center',
+type Project = {
+  projectName: string;
+  overlayText: string;
+  overlayColor: string;
+  overlayFontSize: number;
+  clipId: string | null;
+  clips: Clip[];
 };
 
-const storageKey = 'video-editor-overlay-presets';
+const storageKey = 'video-editor-project-v1';
+const demoClip = (name = 'Opening Shot', duration = 12): Clip => ({
+  id: crypto.randomUUID(), name, url: '', duration, trimStart: 0, trimEnd: duration,
+});
+const initialProject: Project = {
+  projectName: 'Spring Launch Edit', overlayText: 'Launch Day', overlayColor: '#ffffff',
+  overlayFontSize: 42, clipId: null, clips: [],
+};
+
+const formatTime = (seconds: number) => {
+  const safe = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+  return `${Math.floor(safe / 60)}:${Math.floor(safe % 60).toString().padStart(2, '0')}`;
+};
 
 function App() {
-  const [overlay, setOverlay] = useState<OverlayPreset>(defaultPreset);
-  const [savedPresets, setSavedPresets] = useState<OverlayPreset[]>([]);
+  const [project, setProject] = useState<Project>(initialProject);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [status, setStatus] = useState('Ready to edit');
 
   useEffect(() => {
-    const saved = localStorage.getItem(storageKey);
-    if (!saved) {
-      setSavedPresets([defaultPreset]);
-      return;
-    }
-
     try {
-      const parsed = JSON.parse(saved) as OverlayPreset[];
-      setSavedPresets(parsed.length ? parsed : [defaultPreset]);
+      const saved = localStorage.getItem(storageKey);
+      const parsed = saved ? JSON.parse(saved) as Project : null;
+      const next = parsed?.clips?.length ? parsed : { ...initialProject, clips: [demoClip()] };
+      setProject(next);
+      setSelectedClipId(next.clipId ?? next.clips[0]?.id ?? null);
     } catch {
-      setSavedPresets([defaultPreset]);
+      const next = { ...initialProject, clips: [demoClip()] };
+      setProject(next);
+      setSelectedClipId(next.clips[0].id);
     }
   }, []);
 
-  useEffect(() => {
-    if (savedPresets.length > 0) {
-      localStorage.setItem(storageKey, JSON.stringify(savedPresets));
+  const selectedClip = useMemo(
+    () => project.clips.find((clip) => clip.id === selectedClipId) ?? project.clips[0] ?? null,
+    [project.clips, selectedClipId],
+  );
+  const totalDuration = project.clips.reduce((sum, clip) => sum + clip.trimEnd - clip.trimStart, 0);
+
+  const selectClip = (id: string) => {
+    setSelectedClipId(id);
+    setProject((prev) => ({ ...prev, clipId: id }));
+  };
+
+  const reorderClips = (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    setProject((prev) => {
+      const sourceIndex = prev.clips.findIndex((clip) => clip.id === sourceId);
+      const targetIndex = prev.clips.findIndex((clip) => clip.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return prev;
+      const clips = [...prev.clips];
+      const [moved] = clips.splice(sourceIndex, 1);
+      clips.splice(targetIndex, 0, moved);
+      return { ...prev, clips };
+    });
+    setStatus('Timeline order updated.');
+  };
+
+  const handleDragStart = (event: DragEvent<HTMLDivElement>, id: string) => {
+    setDraggedClipId(id);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', id);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>, targetId: string) => {
+    event.preventDefault();
+    const sourceId = event.dataTransfer.getData('text/plain') || draggedClipId;
+    if (sourceId) reorderClips(sourceId, targetId);
+    setDraggedClipId(null);
+    setDropTargetId(null);
+  };
+
+  const moveClip = (id: string, direction: -1 | 1) => {
+    setProject((prev) => {
+      const index = prev.clips.findIndex((clip) => clip.id === id);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= prev.clips.length) return prev;
+      const clips = [...prev.clips];
+      [clips[index], clips[nextIndex]] = [clips[nextIndex], clips[index]];
+      return { ...prev, clips };
+    });
+    setStatus('Timeline order updated.');
+  };
+
+  const addClip = (file: File) => {
+    if (!file.type.startsWith('video/')) {
+      setStatus('Only video files are supported.');
+      return;
     }
-  }, [savedPresets]);
-
-  const updateOverlay = <K extends keyof OverlayPreset>(key: K, value: OverlayPreset[K]) => {
-    setOverlay((prev) => ({ ...prev, [key]: value }));
-  };
-
-  const savePreset = () => {
-    const nextPreset: OverlayPreset = {
-      ...overlay,
-      id: Date.now(),
-      label: `Preset ${savedPresets.length + 1}`,
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.src = url;
+    video.onloadedmetadata = () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 1;
+      const clip: Clip = { id: crypto.randomUUID(), name: file.name.replace(/\.[^/.]+$/, ''), url, duration, trimStart: 0, trimEnd: duration };
+      setProject((prev) => ({ ...prev, clips: [...prev.clips, clip], clipId: clip.id }));
+      setSelectedClipId(clip.id);
+      setStatus(`${file.name} added to the timeline.`);
     };
-
-    setSavedPresets((prev) => [nextPreset, ...prev].slice(0, 5));
   };
 
-  const resetPreset = () => {
-    setOverlay(defaultPreset);
+  const updateTrim = (id: string, key: 'trimStart' | 'trimEnd', value: number) => {
+    setProject((prev) => ({ ...prev, clips: prev.clips.map((clip) => {
+      if (clip.id !== id) return clip;
+      if (key === 'trimStart') return { ...clip, trimStart: Math.min(value, clip.trimEnd - 0.1) };
+      return { ...clip, trimEnd: Math.max(value, clip.trimStart + 0.1) };
+    }) }));
+  };
+
+  const removeClip = (id: string) => {
+    const remaining = project.clips.filter((clip) => clip.id !== id);
+    const nextId = remaining[0]?.id ?? null;
+    setProject((prev) => ({ ...prev, clips: remaining, clipId: nextId }));
+    setSelectedClipId(nextId);
+    setStatus('Clip removed from the timeline.');
+  };
+
+  const saveProject = () => {
+    localStorage.setItem(storageKey, JSON.stringify({ ...project, clipId: selectedClipId }));
+    setStatus('Project saved to local storage.');
+  };
+
+  const exportProject = () => {
+    const blob = new Blob([JSON.stringify({ ...project, exportedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${project.projectName.toLowerCase().replace(/\s+/g, '-') || 'video-project'}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setStatus('Project export downloaded.');
+  };
+
+  const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) addClip(file);
+    event.target.value = '';
   };
 
   return (
     <div className="app-shell">
-      <aside className="panel controls">
-        <div className="panel-header">
-          <span className="eyebrow">Text Overlay Tool</span>
-          <h1>Video Editor</h1>
-        </div>
-
-        <label>
-          Overlay text
-          <input
-            type="text"
-            value={overlay.text}
-            onChange={(event) => updateOverlay('text', event.target.value)}
-            placeholder="Add a title or caption"
-          />
-        </label>
-
-        <div className="field-row two-up">
-          <label>
-            Text color
-            <input
-              type="color"
-              value={overlay.color}
-              onChange={(event) => updateOverlay('color', event.target.value)}
-            />
-          </label>
-
-          <label>
-            Font size
-            <div className="value-badge">{overlay.fontSize}px</div>
-          </label>
-        </div>
-
-        <label>
-          Font size
-          <input
-            type="range"
-            min="20"
-            max="120"
-            value={overlay.fontSize}
-            onChange={(event) => updateOverlay('fontSize', Number(event.target.value))}
-          />
-        </label>
-
-        <label>
-          Opacity
-          <input
-            type="range"
-            min="0.2"
-            max="1"
-            step="0.05"
-            value={overlay.opacity}
-            onChange={(event) => updateOverlay('opacity', Number(event.target.value))}
-          />
-        </label>
-
-        <div className="field-row two-up">
-          <label>
-            Horizontal position
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={overlay.x}
-              onChange={(event) => updateOverlay('x', Number(event.target.value))}
-            />
-          </label>
-
-          <label>
-            Vertical position
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={overlay.y}
-              onChange={(event) => updateOverlay('y', Number(event.target.value))}
-            />
-          </label>
-        </div>
-
-        <label>
-          Alignment
-          <select
-            value={overlay.align}
-            onChange={(event) => updateOverlay('align', event.target.value as 'left' | 'center' | 'right')}
-          >
-            <option value="left">Left</option>
-            <option value="center">Center</option>
-            <option value="right">Right</option>
-          </select>
-        </label>
-
-        <div className="button-group">
-          <button className="primary" onClick={savePreset}>Save preset</button>
-          <button className="secondary" onClick={resetPreset}>Reset</button>
-        </div>
+      <aside className="panel sidebar">
+        <div className="panel-heading"><span className="kicker">MVP Studio</span><h1>Video Editor</h1></div>
+        <section className="card"><h3>Project</h3>
+          <label>Title<input value={project.projectName} onChange={(e) => setProject({ ...project, projectName: e.target.value })} /></label>
+          <div className="button-row"><button className="primary" onClick={saveProject}>Save</button><button className="secondary" onClick={() => location.reload()}>Reload</button></div>
+        </section>
+        <section className="card"><h3>Media</h3>
+          <label className="file-picker"><input type="file" accept="video/*" onChange={handleFileInput} /><span>Upload video</span></label>
+          <button className="secondary full" onClick={() => { const clip = demoClip('Demo Clip', 9); setProject((prev) => ({ ...prev, clips: [...prev.clips, clip], clipId: clip.id })); setSelectedClipId(clip.id); }}>Add demo clip</button>
+        </section>
+        <section className="card"><h3>Text overlay</h3>
+          <label>Text<input value={project.overlayText} onChange={(e) => setProject({ ...project, overlayText: e.target.value })} /></label>
+          <label>Color<input type="color" value={project.overlayColor} onChange={(e) => setProject({ ...project, overlayColor: e.target.value })} /></label>
+          <label>Font size<input type="range" min="18" max="96" value={project.overlayFontSize} onChange={(e) => setProject({ ...project, overlayFontSize: Number(e.target.value) })} /></label>
+        </section>
+        <section className="card"><h3>Export</h3><div className="metrics"><div><span>Clips</span><strong>{project.clips.length}</strong></div><div><span>Duration</span><strong>{formatTime(totalDuration)}</strong></div></div><button className="primary full" onClick={exportProject}>Export JSON</button></section>
       </aside>
 
-      <main className="panel preview-panel">
-        <div className="preview-header">
-          <span className="eyebrow">Preview</span>
-          <h2>Scene output</h2>
-        </div>
-
-        <div className="video-stage">
-          <div className="timeline-bar" />
-          <div className="video-overlay" style={{ left: `${overlay.x}%`, top: `${overlay.y}%` }}>
-            <span
-              style={{
-                color: overlay.color,
-                fontSize: `${overlay.fontSize}px`,
-                opacity: overlay.opacity,
-                textAlign: overlay.align,
-              }}
-            >
-              {overlay.text || 'Your title'}
-            </span>
-          </div>
-        </div>
-
-        <div className="preset-list">
-          <div className="preset-header">
-            <h3>Saved presets</h3>
-          </div>
-
-          {savedPresets.map((preset) => (
-            <button
-              type="button"
-              key={preset.id}
-              className="preset-item"
-              onClick={() => setOverlay(preset)}
-            >
-              <span>{preset.label}</span>
-              <small>{preset.text}</small>
-            </button>
-          ))}
-        </div>
+      <main className="workspace">
+        <section className="panel preview-panel"><div className="section-header"><div><span className="kicker">Preview</span><h2>{project.projectName}</h2></div><span className="status-pill">{status}</span></div>
+          <div className="stage">{selectedClip?.url ? <video src={selectedClip.url} controls playsInline /> : <div className="empty-stage"><p>No source video loaded.</p><small>Upload a clip or add a demo clip to preview your edit.</small></div>}<div className="stage-overlay" style={{ color: project.overlayColor, fontSize: `${project.overlayFontSize}px` }}>{project.overlayText || 'Your title'}</div></div>
+        </section>
+        <section className="panel timeline-panel"><div className="section-header"><div><span className="kicker">Timeline</span><h3>Sequence</h3></div><span className="meta">Drag cards to reorder</span></div>
+          <div className="timeline-list">{project.clips.length === 0 ? <div className="empty-state">Your timeline is empty.</div> : project.clips.map((clip, index) => <div key={clip.id} className={`timeline-item ${selectedClipId === clip.id ? 'selected' : ''} ${dropTargetId === clip.id ? 'drop-target' : ''}`} draggable onClick={() => selectClip(clip.id)} onDragStart={(e) => handleDragStart(e, clip.id)} onDragOver={(e) => { e.preventDefault(); setDropTargetId(clip.id); }} onDragLeave={() => setDropTargetId(null)} onDrop={(e) => handleDrop(e, clip.id)} onDragEnd={() => { setDraggedClipId(null); setDropTargetId(null); }}>
+            <div className="clip-summary"><div className="clip-title"><span className="drag-handle" aria-hidden="true">⋮⋮</span><div><strong>{index + 1}. {clip.name}</strong><small>{clip.url ? 'Uploaded' : 'Demo clip'} · {formatTime(clip.trimEnd - clip.trimStart)}</small></div></div><div className="clip-actions"><button className="icon-btn" disabled={index === 0} onClick={(e) => { e.stopPropagation(); moveClip(clip.id, -1); }}>↑</button><button className="icon-btn" disabled={index === project.clips.length - 1} onClick={(e) => { e.stopPropagation(); moveClip(clip.id, 1); }}>↓</button><button className="delete-btn" onClick={(e) => { e.stopPropagation(); removeClip(clip.id); }}>Remove</button></div></div>
+            <div className="trim-group"><label>Start<input type="range" min="0" max={clip.duration} step="0.1" value={clip.trimStart} onChange={(e) => updateTrim(clip.id, 'trimStart', Number(e.target.value))} /><span>{formatTime(clip.trimStart)}</span></label><label>End<input type="range" min="0" max={clip.duration} step="0.1" value={clip.trimEnd} onChange={(e) => updateTrim(clip.id, 'trimEnd', Number(e.target.value))} /><span>{formatTime(clip.trimEnd)}</span></label></div>
+          </div>)}</div>
+        </section>
       </main>
     </div>
   );

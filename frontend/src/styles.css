@@ -1,0 +1,597 @@
+import { ChangeEvent, useEffect, useMemo, useState } from 'react';
+
+type Clip = {
+  id: string;
+  name: string;
+  url: string;
+  duration: number;
+  trimStart: number;
+  trimEnd: number;
+};
+
+type Project = {
+  projectName: string;
+  overlayText: string;
+  overlayColor: string;
+  overlayFontSize: number;
+  clipId: string | null;
+  clips: Clip[];
+};
+
+const storageKey = 'video-editor-project-v1';
+
+const defaultProject: Project = {
+  projectName: 'Spring Launch Edit',
+  overlayText: 'Launch Day',
+  overlayColor: '#ffffff',
+  overlayFontSize: 42,
+  clipId: null,
+  clips: [],
+};
+
+const formatTime = (seconds: number) => {
+  const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  const minutes = Math.floor(safe / 60);
+  const secs = Math.floor(safe % 60);
+  return `${minutes}:${secs.toString().padStart(2, '0')}`;
+};
+
+function App() {
+  const [project, setProject] = useState<Project>(() => defaultProject);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [status, setStatus] = useState('Ready to edit');
+
+  useEffect(() => {
+    const saved = localStorage.getItem(storageKey);
+    if (!saved) {
+      const demoClip: Clip = {
+        id: 'demo-clip',
+        name: 'Opening Shot',
+        url: '',
+        duration: 12,
+        trimStart: 0,
+        trimEnd: 12,
+      };
+      const seeded = { ...defaultProject, clipId: demoClip.id, clips: [demoClip] };
+      setProject(seeded);
+      setSelectedClipId(demoClip.id);
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(saved) as Project;
+      if (parsed.clips && parsed.clips.length > 0) {
+        setProject(parsed);
+        setSelectedClipId(parsed.clipId ?? parsed.clips[0].id);
+      } else {
+        const demoClip: Clip = {
+          id: 'demo-clip',
+          name: 'Opening Shot',
+          url: '',
+          duration: 12,
+          trimStart: 0,
+          trimEnd: 12,
+        };
+        const seeded = { ...defaultProject, clipId: demoClip.id, clips: [demoClip] };
+        setProject(seeded);
+        setSelectedClipId(demoClip.id);
+      }
+    } catch {
+      const demoClip: Clip = {
+        id: 'demo-clip',
+        name: 'Opening Shot',
+        url: '',
+        duration: 12,
+        trimStart: 0,
+        trimEnd: 12,
+      };
+      const seeded = { ...defaultProject, clipId: demoClip.id, clips: [demoClip] };
+      setProject(seeded);
+      setSelectedClipId(demoClip.id);
+    }
+  }, []);
+
+  const selectedClip = useMemo(
+    () => project.clips.find((clip) => clip.id === selectedClipId) ?? project.clips[0] ?? null,
+    [project.clips, selectedClipId],
+  );
+
+  const selectedVideoUrl = selectedClip?.url ?? '';
+
+  const updateProject = (changes: Partial<Project>) => {
+    setProject((prev) => ({ ...prev, ...changes }));
+  };
+
+  const addClip = async (file: File) => {
+    if (!file.type.startsWith('video/')) {
+      setStatus('Only video files are supported in this MVP.');
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+
+    const duration = await new Promise<number>((resolve) => {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.src = objectUrl;
+      video.onloadedmetadata = () => resolve(Number.isFinite(video.duration) ? video.duration : 0);
+      video.onerror = () => resolve(0);
+    });
+
+    const newClip: Clip = {
+      id: crypto.randomUUID(),
+      name: file.name.replace(/\.[^/.]+$/, ''),
+      url: objectUrl,
+      duration,
+      trimStart: 0,
+      trimEnd: duration || 1,
+    };
+
+    setProject((prev) => {
+      const nextClips = [...prev.clips, newClip];
+      return {
+        ...prev,
+        clips: nextClips,
+        clipId: newClip.id,
+      };
+    });
+    setSelectedClipId(newClip.id);
+    setStatus(`${file.name} added to the timeline.`);
+  };
+
+  const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      addClip(file);
+    }
+    event.target.value = '';
+  };
+
+  const addDemoClip = () => {
+    const demoClip: Clip = {
+      id: crypto.randomUUID(),
+      name: 'Demo Intro',
+      url: '',
+      duration: 9,
+      trimStart: 0,
+      trimEnd: 9,
+    };
+
+    setProject((prev) => ({
+      ...prev,
+      clips: [...prev.clips, demoClip],
+      clipId: demoClip.id,
+    }));
+    setSelectedClipId(demoClip.id);
+    setStatus('Demo clip created. Upload a real video to replace it.');
+  };
+
+  const updateTrim = (clipId: string, key: 'trimStart' | 'trimEnd', value: number) => {
+    setProject((prev) => ({
+      ...prev,
+      clips: prev.clips.map((clip) => {
+        if (clip.id !== clipId) return clip;
+
+        if (key === 'trimStart') {
+          const nextStart = Math.min(Math.max(value, 0), clip.duration);
+          const safeEnd = Math.max(clip.trimEnd, nextStart + 0.1);
+          return { ...clip, trimStart: nextStart, trimEnd: Math.min(safeEnd, clip.duration) };
+        }
+
+        const nextEnd = Math.min(Math.max(value, 0), clip.duration);
+        const safeStart = Math.min(clip.trimStart, nextEnd - 0.1);
+        return { ...clip, trimEnd: nextEnd, trimStart: safeStart };
+      }),
+    }));
+  };
+
+  const removeClip = (clipId: string) => {
+    setProject((prev) => {
+      const remaining = prev.clips.filter((clip) => clip.id !== clipId);
+      return {
+        ...prev,
+        clips: remaining,
+        clipId: remaining[0]?.id ?? null,
+      };
+    });
+    if (selectedClipId === clipId) {
+      const next = project.clips.find((clip) => clip.id !== clipId);
+      setSelectedClipId(next?.id ?? null);
+    }
+    setStatus('Clip removed from the timeline.');
+  };
+
+  const saveProject = () => {
+    const payload = { ...project, clipId: selectedClipId ?? project.clipId };
+    localStorage.setItem(storageKey, JSON.stringify(payload));
+    setStatus('Project saved to local storage.');
+  };
+
+  const loadProject = () => {
+    const saved = localStorage.getItem(storageKey);
+    if (!saved) {
+      setStatus('No saved project found.');
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(saved) as Project;
+      setProject(parsed);
+      setSelectedClipId(parsed.clipId ?? parsed.clips[0]?.id ?? null);
+      setStatus('Saved project restored.');
+    } catch {
+      setStatus('The saved project could not be loaded.');
+    }
+  };
+
+  const exportProject = () => {
+    const payload = {
+      ...project,
+      exportedAt: new Date().toISOString(),
+      clipCount: project.clips.length,
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${project.projectName.toLowerCase().replace(/\s+/g, '-') || 'video-project'}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setStatus('Project export downloaded.');
+  };
+
+  const totalDuration = project.clips.reduce((sum, clip) => sum + (clip.trimEnd - clip.trimStart), 0);
+  const activeClip = selectedClip ?? project.clips[0];
+
+  return (
+    <div className="app-shell">
+      <aside className="panel sidebar">
+        <div className="panel-heading">
+          <span className="kicker">MVP Studio</span>
+          <h1>Video Editor</h1>
+        </div>
+
+        <div className="stack">
+          <section className="card">
+            <h3>Project</h3>
+            <label>
+              Title
+              <input
+                value={project.projectName}
+                onChange={(event) => updateProject({ projectName: event.target.value })}
+              />
+            </label>
+            <div className="button-row">
+              <button className="primary" onClick={saveProject}>Save</button>
+              <button className="secondary" onClick={loadProject}>Load</button>
+            </div>
+          </section>
+
+          <section className="card">
+            <h3>Media</h3>
+            <label className="file-picker">
+              <input type="file" accept="video/*" onChange={handleFileInput} />
+              <span>Upload video</span>
+            </label>
+            <button className="secondary" onClick={addDemoClip}>Add demo clip</button>
+          </section>
+
+          <section className="card">
+            <h3>Text overlay</h3>
+            <label>
+              Text
+              <input
+                value={project.overlayText}
+                onChange={(event) => updateProject({ overlayText: event.target.value })}
+              />
+            </label>
+            <label>
+              Color
+              <input
+                type="color"
+                value={project.overlayColor}
+                onChange={(event) => updateProject({ overlayColor: event.target.value })}
+              />
+            </label>
+            <label>
+              Font size
+              <input
+                type="range"
+                min="18"
+                max="96"
+                value={project.overlayFontSize}
+                onChange={(event) => updateProject({ overlayFontSize: Number(event.target.value) })}
+              />
+            </label>
+          </section>
+
+          <section className="card">
+            <h3>Export</h3>
+            <div className="metrics">
+              <div>
+                <span>Clips</span>
+                <strong>{project.clips.length}</strong>
+              </div>
+              <div>
+                <span>Duration</span>
+                <strong>{formatTime(totalDuration)}</strong>
+              </div>
+            </div>
+            <button className="primary" onClick={exportProject}>Export JSON</button>
+          </section>
+        </div>
+      </aside>
+
+      <main className="workspace">
+        <section className="panel preview-panel">
+          <div className="section-header">
+            <div>
+              <span className="kicker">Preview</span>
+              <h2>{project.projectName}</h2>
+            </div>
+            <span className="status-pill">{status}</span>
+          </div>
+
+          <div className="stage">
+            {selectedVideoUrl ? (
+              <video key={selectedVideoUrl} src={selectedVideoUrl} controls playsInline muted />
+            ) : (
+              <div className="empty-stage">
+                <p>No source video loaded.</p>
+                <small>Upload a clip or add a demo clip to preview your edit.</small>
+              </div>
+            )}
+
+            <div className="stage-overlay" style={{ color: project.overlayColor, fontSize: `${project.overlayFontSize}px` }}>
+              {project.overlayText || 'Your title'}
+            </div>
+          </div>
+        </section>
+
+        <section className="panel timeline-panel">
+          <div className="section-header">
+            <div>
+              <span className="kicker">Timeline</span>
+              <h3>Sequence</h3>
+            </div>
+            <span className="meta">{project.clips.length} clips</span>
+          </div>
+
+          <div className="timeline-list">
+            {project.clips.length === 0 ? (
+              <div className="empty-state">Your timeline is empty. Add a clip to begin.</div>
+            ) : (
+              project.clips.map((clip) => (
+                <div
+                  key={clip.id}
+                  className={`timeline-item ${selectedClipId === clip.id ? 'selected' : ''}`}
+                  onClick={() => setSelectedClipId(clip.id)}
+                >
+                  <div className="clip-summary">
+                    <div>
+                      <strong>{clip.name}</strong>
+                      <small>{clip.url ? 'Uploaded' : 'Demo clip'}</small>
+                    </div>
+                    <button
+                      className="delete-btn"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        removeClip(clip.id);
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+
+                  <div className="trim-group">
+                    <label>
+                      Start
+                      <input
+                        type="range"
+                        min={0}
+                        max={clip.duration}
+                        step={0.1}
+                        value={clip.trimStart}
+                        onChange={(event) => updateTrim(clip.id, 'trimStart', Number(event.target.value))}
+                      />
+                      <span>{formatTime(clip.trimStart)}</span>
+                    </label>
+
+                    <label>
+                      End
+                      <input
+                        type="range"
+                        min={0}
+                        max={clip.duration}
+                        step={0.1}
+                        value={clip.trimEnd}
+                        onChange={(event) => updateTrim(clip.id, 'trimEnd', Number(event.target.value))}
+                      />
+                      <span>{formatTime(clip.trimEnd)}</span>
+                    </label>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {activeClip && (
+            <div className="active-clip-box">
+              <span className="kicker">Selected clip</span>
+              <strong>{activeClip.name}</strong>
+              <small>
+                {formatTime(activeClip.trimStart)} - {formatTime(activeClip.trimEnd)} / {formatTime(activeClip.duration)}
+              </small>
+            </div>
+          )}
+        </section>
+      </main>
+    </div>
+  );
+}
+
+export default App;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

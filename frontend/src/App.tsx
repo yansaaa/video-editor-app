@@ -9,22 +9,50 @@ type Clip = {
   trimEnd: number;
 };
 
+type TextLayer = {
+  id: string;
+  text: string;
+  color: string;
+  fontSize: number;
+  fontWeight: number;
+  opacity: number;
+  letterSpacing: number;
+  x: number;
+  y: number;
+  align: 'left' | 'center' | 'right';
+  shadow: boolean;
+  shadowColor: string;
+};
+
 type Project = {
   projectName: string;
-  overlayText: string;
-  overlayColor: string;
-  overlayFontSize: number;
+  textLayers: TextLayer[];
   clipId: string | null;
   clips: Clip[];
 };
 
 const storageKey = 'video-editor-project-v1';
-const demoClip = (name = 'Opening Shot', duration = 12): Clip => ({
-  id: crypto.randomUUID(), name, url: '', duration, trimStart: 0, trimEnd: duration,
+const demoClip = (name = 'Opening Shot', duration = 12): Clip => ({ id: crypto.randomUUID(), name, url: '', duration, trimStart: 0, trimEnd: duration });
+const defaultLayer = (): TextLayer => ({
+  id: crypto.randomUUID(),
+  text: 'Launch Day',
+  color: '#ffffff',
+  fontSize: 42,
+  fontWeight: 700,
+  opacity: 1,
+  letterSpacing: 1,
+  x: 50,
+  y: 52,
+  align: 'center',
+  shadow: true,
+  shadowColor: '#000000',
 });
+
 const initialProject: Project = {
-  projectName: 'Spring Launch Edit', overlayText: 'Launch Day', overlayColor: '#ffffff',
-  overlayFontSize: 42, clipId: null, clips: [],
+  projectName: 'Spring Launch Edit',
+  textLayers: [defaultLayer()],
+  clipId: null,
+  clips: [],
 };
 
 const formatTime = (seconds: number) => {
@@ -35,6 +63,7 @@ const formatTime = (seconds: number) => {
 function App() {
   const [project, setProject] = useState<Project>(initialProject);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [status, setStatus] = useState('Ready to edit');
@@ -43,13 +72,15 @@ function App() {
     try {
       const saved = localStorage.getItem(storageKey);
       const parsed = saved ? JSON.parse(saved) as Project : null;
-      const next = parsed?.clips?.length ? parsed : { ...initialProject, clips: [demoClip()] };
+      const next = parsed?.clips?.length ? parsed : { ...initialProject, textLayers: [defaultLayer()], clips: [demoClip()] };
       setProject(next);
       setSelectedClipId(next.clipId ?? next.clips[0]?.id ?? null);
+      setSelectedLayerId(next.textLayers[0]?.id ?? null);
     } catch {
-      const next = { ...initialProject, clips: [demoClip()] };
+      const next = { ...initialProject, textLayers: [defaultLayer()], clips: [demoClip()] };
       setProject(next);
       setSelectedClipId(next.clips[0].id);
+      setSelectedLayerId(next.textLayers[0].id);
     }
   }, []);
 
@@ -57,11 +88,35 @@ function App() {
     () => project.clips.find((clip) => clip.id === selectedClipId) ?? project.clips[0] ?? null,
     [project.clips, selectedClipId],
   );
-  const totalDuration = project.clips.reduce((sum, clip) => sum + clip.trimEnd - clip.trimStart, 0);
 
-  const selectClip = (id: string) => {
-    setSelectedClipId(id);
-    setProject((prev) => ({ ...prev, clipId: id }));
+  const selectedLayer = useMemo(
+    () => project.textLayers.find((layer) => layer.id === selectedLayerId) ?? project.textLayers[0] ?? null,
+    [project.textLayers, selectedLayerId],
+  );
+
+  const totalDuration = project.clips.reduce((sum, clip) => sum + (clip.trimEnd - clip.trimStart), 0);
+
+  const setLayerValue = <K extends keyof TextLayer>(key: K, value: TextLayer[K]) => {
+    if (!selectedLayerId) return;
+    setProject((prev) => ({
+      ...prev,
+      textLayers: prev.textLayers.map((layer) => layer.id === selectedLayerId ? { ...layer, [key]: value } : layer),
+    }));
+  };
+
+  const addTextLayer = () => {
+    const layer = defaultLayer();
+    setProject((prev) => ({ ...prev, textLayers: [...prev.textLayers, layer] }));
+    setSelectedLayerId(layer.id);
+    setStatus('New text layer added.');
+  };
+
+  const removeTextLayer = () => {
+    if (!selectedLayerId || project.textLayers.length <= 1) return;
+    const nextLayers = project.textLayers.filter((layer) => layer.id !== selectedLayerId);
+    setProject((prev) => ({ ...prev, textLayers: nextLayers }));
+    setSelectedLayerId(nextLayers[0]?.id ?? null);
+    setStatus('Text layer removed.');
   };
 
   const reorderClips = (sourceId: string, targetId: string) => {
@@ -160,32 +215,71 @@ function App() {
     event.target.value = '';
   };
 
+  const activeLayer = selectedLayer ?? project.textLayers[0];
+
   return (
     <div className="app-shell">
       <aside className="panel sidebar">
         <div className="panel-heading"><span className="kicker">MVP Studio</span><h1>Video Editor</h1></div>
         <section className="card"><h3>Project</h3>
           <label>Title<input value={project.projectName} onChange={(e) => setProject({ ...project, projectName: e.target.value })} /></label>
-          <div className="button-row"><button className="primary" onClick={saveProject}>Save</button><button className="secondary" onClick={() => location.reload()}>Reload</button></div>
+          <div className="button-row"><button className="primary" onClick={saveProject}>Save</button><button className="secondary" onClick={() => window.location.reload()}>Reload</button></div>
         </section>
         <section className="card"><h3>Media</h3>
           <label className="file-picker"><input type="file" accept="video/*" onChange={handleFileInput} /><span>Upload video</span></label>
-          <button className="secondary full" onClick={() => { const clip = demoClip('Demo Clip', 9); setProject((prev) => ({ ...prev, clips: [...prev.clips, clip], clipId: clip.id })); setSelectedClipId(clip.id); }}>Add demo clip</button>
+          <button className="secondary full" onClick={() => {
+            const clip = demoClip('Demo Clip', 9);
+            setProject((prev) => ({ ...prev, clips: [...prev.clips, clip], clipId: clip.id }));
+            setSelectedClipId(clip.id);
+          }}>Add demo clip</button>
         </section>
-        <section className="card"><h3>Text overlay</h3>
-          <label>Text<input value={project.overlayText} onChange={(e) => setProject({ ...project, overlayText: e.target.value })} /></label>
-          <label>Color<input type="color" value={project.overlayColor} onChange={(e) => setProject({ ...project, overlayColor: e.target.value })} /></label>
-          <label>Font size<input type="range" min="18" max="96" value={project.overlayFontSize} onChange={(e) => setProject({ ...project, overlayFontSize: Number(e.target.value) })} /></label>
+        <section className="card"><h3>Text layers</h3>
+          <div className="layer-list">
+            {project.textLayers.map((layer) => (
+              <button key={layer.id} className={`layer-chip ${selectedLayerId === layer.id ? 'selected' : ''}`} onClick={() => setSelectedLayerId(layer.id)}>
+                {layer.text || 'Untitled layer'}
+              </button>
+            ))}
+          </div>
+          <div className="button-row top-gap"><button className="secondary" onClick={addTextLayer}>Add layer</button><button className="secondary" onClick={removeTextLayer}>Remove</button></div>
+        </section>
+        <section className="card"><h3>Layer styling</h3>
+          {activeLayer && (
+            <>
+              <label>Text<input value={activeLayer.text} onChange={(e) => setLayerValue('text', e.target.value)} /></label>
+              <label>Color<input type="color" value={activeLayer.color} onChange={(e) => setLayerValue('color', e.target.value)} /></label>
+              <label>Font size<input type="range" min="18" max="110" value={activeLayer.fontSize} onChange={(e) => setLayerValue('fontSize', Number(e.target.value))} /></label>
+              <label>Weight<input type="range" min="300" max="900" step="100" value={activeLayer.fontWeight} onChange={(e) => setLayerValue('fontWeight', Number(e.target.value))} /></label>
+              <label>Opacity<input type="range" min="0.2" max="1" step="0.05" value={activeLayer.opacity} onChange={(e) => setLayerValue('opacity', Number(e.target.value))} /></label>
+              <label>Letter spacing<input type="range" min="0" max="12" value={activeLayer.letterSpacing} onChange={(e) => setLayerValue('letterSpacing', Number(e.target.value))} /></label>
+              <div className="two-col">
+                <label>X<input type="range" min="0" max="100" value={activeLayer.x} onChange={(e) => setLayerValue('x', Number(e.target.value))} /></label>
+                <label>Y<input type="range" min="0" max="100" value={activeLayer.y} onChange={(e) => setLayerValue('y', Number(e.target.value))} /></label>
+              </div>
+              <label>Alignment<select value={activeLayer.align} onChange={(e) => setLayerValue('align', e.target.value as 'left' | 'center' | 'right')}>
+                <option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>
+              </select></label>
+              <label className="toggle-row"><input type="checkbox" checked={activeLayer.shadow} onChange={(e) => setLayerValue('shadow', e.target.checked)} /> Shadow</label>
+              {activeLayer.shadow && <label>Shadow color<input type="color" value={activeLayer.shadowColor} onChange={(e) => setLayerValue('shadowColor', e.target.value)} /></label>}
+            </>
+          )}
         </section>
         <section className="card"><h3>Export</h3><div className="metrics"><div><span>Clips</span><strong>{project.clips.length}</strong></div><div><span>Duration</span><strong>{formatTime(totalDuration)}</strong></div></div><button className="primary full" onClick={exportProject}>Export JSON</button></section>
       </aside>
 
       <main className="workspace">
         <section className="panel preview-panel"><div className="section-header"><div><span className="kicker">Preview</span><h2>{project.projectName}</h2></div><span className="status-pill">{status}</span></div>
-          <div className="stage">{selectedClip?.url ? <video src={selectedClip.url} controls playsInline /> : <div className="empty-stage"><p>No source video loaded.</p><small>Upload a clip or add a demo clip to preview your edit.</small></div>}<div className="stage-overlay" style={{ color: project.overlayColor, fontSize: `${project.overlayFontSize}px` }}>{project.overlayText || 'Your title'}</div></div>
+          <div className="stage">
+            {selectedClip?.url ? <video src={selectedClip.url} controls playsInline /> : <div className="empty-stage"><p>No source video loaded.</p><small>Upload a clip or add a demo clip to preview your edit.</small></div>}
+            {project.textLayers.map((layer) => (
+              <div key={layer.id} className="stage-text-layer" style={{ left: `${layer.x}%`, top: `${layer.y}%`, color: layer.color, fontSize: `${layer.fontSize}px`, fontWeight: layer.fontWeight, opacity: layer.opacity, letterSpacing: `${layer.letterSpacing}px`, textAlign: layer.align, textShadow: layer.shadow ? `0 6px 24px ${layer.shadowColor}` : 'none' }}>
+                {layer.text || 'Your title'}
+              </div>
+            ))}
+          </div>
         </section>
         <section className="panel timeline-panel"><div className="section-header"><div><span className="kicker">Timeline</span><h3>Sequence</h3></div><span className="meta">Drag cards to reorder</span></div>
-          <div className="timeline-list">{project.clips.length === 0 ? <div className="empty-state">Your timeline is empty.</div> : project.clips.map((clip, index) => <div key={clip.id} className={`timeline-item ${selectedClipId === clip.id ? 'selected' : ''} ${dropTargetId === clip.id ? 'drop-target' : ''}`} draggable onClick={() => selectClip(clip.id)} onDragStart={(e) => handleDragStart(e, clip.id)} onDragOver={(e) => { e.preventDefault(); setDropTargetId(clip.id); }} onDragLeave={() => setDropTargetId(null)} onDrop={(e) => handleDrop(e, clip.id)} onDragEnd={() => { setDraggedClipId(null); setDropTargetId(null); }}>
+          <div className="timeline-list">{project.clips.length === 0 ? <div className="empty-state">Your timeline is empty.</div> : project.clips.map((clip, index) => <div key={clip.id} className={`timeline-item ${selectedClipId === clip.id ? 'selected' : ''} ${dropTargetId === clip.id ? 'drop-target' : ''}`} draggable onClick={() => setSelectedClipId(clip.id)} onDragStart={(e) => handleDragStart(e, clip.id)} onDragOver={(e) => { e.preventDefault(); setDropTargetId(clip.id); }} onDragLeave={() => setDropTargetId(null)} onDrop={(e) => handleDrop(e, clip.id)} onDragEnd={() => { setDraggedClipId(null); setDropTargetId(null); }}>
             <div className="clip-summary"><div className="clip-title"><span className="drag-handle" aria-hidden="true">⋮⋮</span><div><strong>{index + 1}. {clip.name}</strong><small>{clip.url ? 'Uploaded' : 'Demo clip'} · {formatTime(clip.trimEnd - clip.trimStart)}</small></div></div><div className="clip-actions"><button className="icon-btn" disabled={index === 0} onClick={(e) => { e.stopPropagation(); moveClip(clip.id, -1); }}>↑</button><button className="icon-btn" disabled={index === project.clips.length - 1} onClick={(e) => { e.stopPropagation(); moveClip(clip.id, 1); }}>↓</button><button className="delete-btn" onClick={(e) => { e.stopPropagation(); removeClip(clip.id); }}>Remove</button></div></div>
             <div className="trim-group"><label>Start<input type="range" min="0" max={clip.duration} step="0.1" value={clip.trimStart} onChange={(e) => updateTrim(clip.id, 'trimStart', Number(e.target.value))} /><span>{formatTime(clip.trimStart)}</span></label><label>End<input type="range" min="0" max={clip.duration} step="0.1" value={clip.trimEnd} onChange={(e) => updateTrim(clip.id, 'trimEnd', Number(e.target.value))} /><span>{formatTime(clip.trimEnd)}</span></label></div>
           </div>)}</div>

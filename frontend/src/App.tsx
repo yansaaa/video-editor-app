@@ -31,6 +31,11 @@ type Project = {
   clips: Clip[];
 };
 
+type TextLayerPreset = {
+  name: string;
+  values: Partial<TextLayer>;
+};
+
 const storageKey = 'video-editor-project-v1';
 const demoClip = (name = 'Opening Shot', duration = 12): Clip => ({ id: crypto.randomUUID(), name, url: '', duration, trimStart: 0, trimEnd: duration });
 const defaultLayer = (): TextLayer => ({
@@ -47,6 +52,14 @@ const defaultLayer = (): TextLayer => ({
   shadow: true,
   shadowColor: '#000000',
 });
+
+const textLayerPresets: TextLayerPreset[] = [
+  { name: 'Headline', values: { color: '#ffffff', fontSize: 52, fontWeight: 800, letterSpacing: 1, x: 50, y: 52, align: 'center', shadow: true, shadowColor: '#000000' } },
+  { name: 'Title Card', values: { color: '#f7d57a', fontSize: 64, fontWeight: 700, letterSpacing: 2, x: 50, y: 40, align: 'center', shadow: true, shadowColor: '#4a2d00' } },
+  { name: 'Lower Third', values: { color: '#dfe9ff', fontSize: 30, fontWeight: 600, letterSpacing: 1, x: 50, y: 78, align: 'center', shadow: true, shadowColor: '#0a1220' } },
+  { name: 'Neon', values: { color: '#6de7ff', fontSize: 46, fontWeight: 700, letterSpacing: 3, x: 50, y: 50, align: 'center', shadow: true, shadowColor: '#0d1f46' } },
+  { name: 'Soft Promo', values: { color: '#f5d0ff', fontSize: 40, fontWeight: 500, letterSpacing: 0, x: 50, y: 52, align: 'center', shadow: false, shadowColor: '#000000' } },
+];
 
 const initialProject: Project = {
   projectName: 'Spring Launch Edit',
@@ -109,6 +122,34 @@ function App() {
     setProject((prev) => ({ ...prev, textLayers: [...prev.textLayers, layer] }));
     setSelectedLayerId(layer.id);
     setStatus('New text layer added.');
+  };
+
+  const duplicateSelectedLayer = () => {
+    if (!selectedLayer) return;
+    const duplicate: TextLayer = {
+      ...selectedLayer,
+      id: crypto.randomUUID(),
+      text: `${selectedLayer.text} Copy`,
+      x: Math.min(selectedLayer.x + 6, 94),
+      y: Math.min(selectedLayer.y + 6, 90),
+    };
+    setProject((prev) => ({ ...prev, textLayers: [...prev.textLayers, duplicate] }));
+    setSelectedLayerId(duplicate.id);
+    setStatus('Layer duplicated.');
+  };
+
+  const applyLayerPreset = (presetName: string) => {
+    if (!selectedLayerId) return;
+    const preset = textLayerPresets.find((item) => item.name === presetName);
+    if (!preset) return;
+
+    setProject((prev) => ({
+      ...prev,
+      textLayers: prev.textLayers.map((layer) => (
+        layer.id === selectedLayerId ? { ...layer, ...preset.values } : layer
+      )),
+    }));
+    setStatus(`${preset.name} preset applied.`);
   };
 
   const removeTextLayer = () => {
@@ -261,6 +302,15 @@ function App() {
               </select></label>
               <label className="toggle-row"><input type="checkbox" checked={activeLayer.shadow} onChange={(e) => setLayerValue('shadow', e.target.checked)} /> Shadow</label>
               {activeLayer.shadow && <label>Shadow color<input type="color" value={activeLayer.shadowColor} onChange={(e) => setLayerValue('shadowColor', e.target.value)} /></label>}
+              <div className="preset-row">
+                <span className="mini-label">Quick presets</span>
+                <div className="preset-buttons">
+                  {textLayerPresets.map((preset) => (
+                    <button type="button" key={preset.name} className="secondary preset-btn" onClick={() => applyLayerPreset(preset.name)}>{preset.name}</button>
+                  ))}
+                </div>
+              </div>
+              <button type="button" className="secondary full" onClick={duplicateSelectedLayer}>Duplicate layer</button>
             </>
           )}
         </section>
@@ -270,7 +320,7 @@ function App() {
       <main className="workspace">
         <section className="panel preview-panel"><div className="section-header"><div><span className="kicker">Preview</span><h2>{project.projectName}</h2></div><span className="status-pill">{status}</span></div>
           <div className="stage">
-            {selectedClip?.url ? <video src={selectedClip.url} controls playsInline /> : <div className="empty-stage"><p>No source video loaded.</p><small>Upload a clip or add a demo clip to preview your edit.</small></div>}
+            {selectedClip?.url ? <video src={selectedClip.url} controls playsInline /> : <div className="empty-stage"><p>No source video loaded.</p><small>Upload a clip or add a demo clip to preview the timeline.</small></div>}
             {project.textLayers.map((layer) => (
               <div key={layer.id} className="stage-text-layer" style={{ left: `${layer.x}%`, top: `${layer.y}%`, color: layer.color, fontSize: `${layer.fontSize}px`, fontWeight: layer.fontWeight, opacity: layer.opacity, letterSpacing: `${layer.letterSpacing}px`, textAlign: layer.align, textShadow: layer.shadow ? `0 6px 24px ${layer.shadowColor}` : 'none' }}>
                 {layer.text || 'Your title'}
@@ -279,8 +329,9 @@ function App() {
           </div>
         </section>
         <section className="panel timeline-panel"><div className="section-header"><div><span className="kicker">Timeline</span><h3>Sequence</h3></div><span className="meta">Drag cards to reorder</span></div>
-          <div className="timeline-list">{project.clips.length === 0 ? <div className="empty-state">Your timeline is empty.</div> : project.clips.map((clip, index) => <div key={clip.id} className={`timeline-item ${selectedClipId === clip.id ? 'selected' : ''} ${dropTargetId === clip.id ? 'drop-target' : ''}`} draggable onClick={() => setSelectedClipId(clip.id)} onDragStart={(e) => handleDragStart(e, clip.id)} onDragOver={(e) => { e.preventDefault(); setDropTargetId(clip.id); }} onDragLeave={() => setDropTargetId(null)} onDrop={(e) => handleDrop(e, clip.id)} onDragEnd={() => { setDraggedClipId(null); setDropTargetId(null); }}>
-            <div className="clip-summary"><div className="clip-title"><span className="drag-handle" aria-hidden="true">⋮⋮</span><div><strong>{index + 1}. {clip.name}</strong><small>{clip.url ? 'Uploaded' : 'Demo clip'} · {formatTime(clip.trimEnd - clip.trimStart)}</small></div></div><div className="clip-actions"><button className="icon-btn" disabled={index === 0} onClick={(e) => { e.stopPropagation(); moveClip(clip.id, -1); }}>↑</button><button className="icon-btn" disabled={index === project.clips.length - 1} onClick={(e) => { e.stopPropagation(); moveClip(clip.id, 1); }}>↓</button><button className="delete-btn" onClick={(e) => { e.stopPropagation(); removeClip(clip.id); }}>Remove</button></div></div>
+          <div className="timeline-list">{project.clips.length === 0 ? <div className="empty-state">Your timeline is empty.</div> : project.clips.map((clip, index) => <div key={clip.id} className={`timeline-item ${selectedClipId === clip.id ? 'selected' : ''} ${dropTargetId === clip.id ? 'drop-target' : ''}`} onDragOver={(e) => { e.preventDefault(); setDropTargetId(clip.id); }} onDragLeave={() => setDropTargetId((current) => (current === clip.id ? null : current))} onDrop={(e) => handleDrop(e, clip.id)} onDragStart={(event) => handleDragStart(event, clip.id)} draggable>
+            <div className="clip-summary"><div className="clip-title"><span className="drag-handle" aria-hidden="true">⋮⋮</span><div><strong>{index + 1}. {clip.name}</strong><small>{clip.url ? 'Imported media' : 'Demo media'}</small></div></div>
+            <div className="clip-actions"><button type="button" className="icon-btn" onClick={() => moveClip(clip.id, -1)} disabled={index === 0}>↑</button><button type="button" className="icon-btn" onClick={() => moveClip(clip.id, 1)} disabled={index === project.clips.length - 1}>↓</button><button type="button" className="delete-btn" onClick={() => removeClip(clip.id)}>Delete</button></div></div>
             <div className="trim-group"><label>Start<input type="range" min="0" max={clip.duration} step="0.1" value={clip.trimStart} onChange={(e) => updateTrim(clip.id, 'trimStart', Number(e.target.value))} /><span>{formatTime(clip.trimStart)}</span></label><label>End<input type="range" min="0" max={clip.duration} step="0.1" value={clip.trimEnd} onChange={(e) => updateTrim(clip.id, 'trimEnd', Number(e.target.value))} /><span>{formatTime(clip.trimEnd)}</span></label></div>
           </div>)}</div>
         </section>

@@ -36,7 +36,15 @@ type TextLayerPreset = {
   values: Partial<TextLayer>;
 };
 
+type ProjectVersion = {
+  id: string;
+  savedAt: string;
+  project: Project;
+};
+
 const storageKey = 'video-editor-project-v1';
+const versionsKey = 'video-editor-project-versions-v1';
+const maxVersions = 5;
 const demoClip = (name = 'Opening Shot', duration = 12): Clip => ({ id: crypto.randomUUID(), name, url: '', duration, trimStart: 0, trimEnd: duration });
 const defaultLayer = (): TextLayer => ({
   id: crypto.randomUUID(),
@@ -73,29 +81,46 @@ const formatTime = (seconds: number) => {
   return `${Math.floor(safe / 60)}:${Math.floor(safe % 60).toString().padStart(2, '0')}`;
 };
 
+const cloneProject = (project: Project, clipId: string | null): Project => JSON.parse(JSON.stringify({ ...project, clipId })) as Project;
+
 function App() {
   const [project, setProject] = useState<Project>(initialProject);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [versions, setVersions] = useState<ProjectVersion[]>([]);
   const [status, setStatus] = useState('Ready to edit');
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem(storageKey);
+      const savedVersions = localStorage.getItem(versionsKey);
       const parsed = saved ? JSON.parse(saved) as Project : null;
       const next = parsed?.clips?.length ? parsed : { ...initialProject, textLayers: [defaultLayer()], clips: [demoClip()] };
       setProject(next);
       setSelectedClipId(next.clipId ?? next.clips[0]?.id ?? null);
       setSelectedLayerId(next.textLayers[0]?.id ?? null);
+      setVersions(savedVersions ? (JSON.parse(savedVersions) as ProjectVersion[]) : []);
     } catch {
       const next = { ...initialProject, textLayers: [defaultLayer()], clips: [demoClip()] };
       setProject(next);
       setSelectedClipId(next.clips[0].id);
       setSelectedLayerId(next.textLayers[0].id);
+    } finally {
+      setHasLoaded(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (!hasLoaded) return;
+    const timer = window.setTimeout(() => {
+      localStorage.setItem(storageKey, JSON.stringify({ ...project, clipId: selectedClipId }));
+      setStatus('Auto-saved just now.');
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [project, selectedClipId, hasLoaded]);
 
   const selectedClip = useMemo(
     () => project.clips.find((clip) => clip.id === selectedClipId) ?? project.clips[0] ?? null,
@@ -108,6 +133,27 @@ function App() {
   );
 
   const totalDuration = project.clips.reduce((sum, clip) => sum + (clip.trimEnd - clip.trimStart), 0);
+
+  const createVersion = (message = 'Version snapshot created.') => {
+    const version: ProjectVersion = {
+      id: crypto.randomUUID(),
+      savedAt: new Date().toISOString(),
+      project: cloneProject(project, selectedClipId),
+    };
+    const nextVersions = [version, ...versions].slice(0, maxVersions);
+    setVersions(nextVersions);
+    localStorage.setItem(versionsKey, JSON.stringify(nextVersions));
+    localStorage.setItem(storageKey, JSON.stringify({ ...project, clipId: selectedClipId }));
+    setStatus(message);
+  };
+
+  const restoreVersion = (version: ProjectVersion) => {
+    const restored = cloneProject(version.project, version.project.clipId);
+    setProject(restored);
+    setSelectedClipId(restored.clipId ?? restored.clips[0]?.id ?? null);
+    setSelectedLayerId(restored.textLayers[0]?.id ?? null);
+    setStatus(`Restored version from ${new Date(version.savedAt).toLocaleString()}.`);
+  };
 
   const setLayerValue = <K extends keyof TextLayer>(key: K, value: TextLayer[K]) => {
     if (!selectedLayerId) return;
@@ -126,13 +172,7 @@ function App() {
 
   const duplicateSelectedLayer = () => {
     if (!selectedLayer) return;
-    const duplicate: TextLayer = {
-      ...selectedLayer,
-      id: crypto.randomUUID(),
-      text: `${selectedLayer.text} Copy`,
-      x: Math.min(selectedLayer.x + 6, 94),
-      y: Math.min(selectedLayer.y + 6, 90),
-    };
+    const duplicate: TextLayer = { ...selectedLayer, id: crypto.randomUUID(), text: `${selectedLayer.text} Copy`, x: Math.min(selectedLayer.x + 6, 94), y: Math.min(selectedLayer.y + 6, 90) };
     setProject((prev) => ({ ...prev, textLayers: [...prev.textLayers, duplicate] }));
     setSelectedLayerId(duplicate.id);
     setStatus('Layer duplicated.');
@@ -142,13 +182,7 @@ function App() {
     if (!selectedLayerId) return;
     const preset = textLayerPresets.find((item) => item.name === presetName);
     if (!preset) return;
-
-    setProject((prev) => ({
-      ...prev,
-      textLayers: prev.textLayers.map((layer) => (
-        layer.id === selectedLayerId ? { ...layer, ...preset.values } : layer
-      )),
-    }));
+    setProject((prev) => ({ ...prev, textLayers: prev.textLayers.map((layer) => layer.id === selectedLayerId ? { ...layer, ...preset.values } : layer) }));
     setStatus(`${preset.name} preset applied.`);
   };
 
@@ -201,10 +235,7 @@ function App() {
   };
 
   const addClip = (file: File) => {
-    if (!file.type.startsWith('video/')) {
-      setStatus('Only video files are supported.');
-      return;
-    }
+    if (!file.type.startsWith('video/')) { setStatus('Only video files are supported.'); return; }
     const url = URL.createObjectURL(file);
     const video = document.createElement('video');
     video.preload = 'metadata';
@@ -234,10 +265,7 @@ function App() {
     setStatus('Clip removed from the timeline.');
   };
 
-  const saveProject = () => {
-    localStorage.setItem(storageKey, JSON.stringify({ ...project, clipId: selectedClipId }));
-    setStatus('Project saved to local storage.');
-  };
+  const saveProject = () => createVersion('Project saved and version snapshot created.');
 
   const exportProject = () => {
     const blob = new Blob([JSON.stringify({ ...project, exportedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' });
@@ -264,74 +292,49 @@ function App() {
         <div className="panel-heading"><span className="kicker">MVP Studio</span><h1>Video Editor</h1></div>
         <section className="card"><h3>Project</h3>
           <label>Title<input value={project.projectName} onChange={(e) => setProject({ ...project, projectName: e.target.value })} /></label>
-          <div className="button-row"><button className="primary" onClick={saveProject}>Save</button><button className="secondary" onClick={() => window.location.reload()}>Reload</button></div>
+          <div className="button-row"><button className="primary" onClick={saveProject}>Save version</button><button className="secondary" onClick={() => window.location.reload()}>Reload</button></div>
+          <small>Changes auto-save after a short pause.</small>
+        </section>
+        <section className="card"><h3>Version history</h3>
+          {versions.length === 0 ? <small>No manual versions yet. Save a version to create a restore point.</small> : <div className="version-list">
+            {versions.map((version) => <div className="version-item" key={version.id}><div><strong>{new Date(version.savedAt).toLocaleString()}</strong><small>{version.project.projectName} · {version.project.clips.length} clips</small></div><button type="button" className="secondary" onClick={() => restoreVersion(version)}>Restore</button></div>)}
+          </div>}
         </section>
         <section className="card"><h3>Media</h3>
           <label className="file-picker"><input type="file" accept="video/*" onChange={handleFileInput} /><span>Upload video</span></label>
-          <button className="secondary full" onClick={() => {
-            const clip = demoClip('Demo Clip', 9);
-            setProject((prev) => ({ ...prev, clips: [...prev.clips, clip], clipId: clip.id }));
-            setSelectedClipId(clip.id);
-          }}>Add demo clip</button>
+          <button className="secondary full" onClick={() => { const clip = demoClip('Demo Clip', 9); setProject((prev) => ({ ...prev, clips: [...prev.clips, clip], clipId: clip.id })); setSelectedClipId(clip.id); }}>Add demo clip</button>
         </section>
         <section className="card"><h3>Text layers</h3>
-          <div className="layer-list">
-            {project.textLayers.map((layer) => (
-              <button key={layer.id} className={`layer-chip ${selectedLayerId === layer.id ? 'selected' : ''}`} onClick={() => setSelectedLayerId(layer.id)}>
-                {layer.text || 'Untitled layer'}
-              </button>
-            ))}
-          </div>
+          <div className="layer-list">{project.textLayers.map((layer) => <button key={layer.id} className={`layer-chip ${selectedLayerId === layer.id ? 'selected' : ''}`} onClick={() => setSelectedLayerId(layer.id)}>{layer.text || 'Untitled layer'}</button>)}</div>
           <div className="button-row top-gap"><button className="secondary" onClick={addTextLayer}>Add layer</button><button className="secondary" onClick={removeTextLayer}>Remove</button></div>
         </section>
         <section className="card"><h3>Layer styling</h3>
-          {activeLayer && (
-            <>
-              <label>Text<input value={activeLayer.text} onChange={(e) => setLayerValue('text', e.target.value)} /></label>
-              <label>Color<input type="color" value={activeLayer.color} onChange={(e) => setLayerValue('color', e.target.value)} /></label>
-              <label>Font size<input type="range" min="18" max="110" value={activeLayer.fontSize} onChange={(e) => setLayerValue('fontSize', Number(e.target.value))} /></label>
-              <label>Weight<input type="range" min="300" max="900" step="100" value={activeLayer.fontWeight} onChange={(e) => setLayerValue('fontWeight', Number(e.target.value))} /></label>
-              <label>Opacity<input type="range" min="0.2" max="1" step="0.05" value={activeLayer.opacity} onChange={(e) => setLayerValue('opacity', Number(e.target.value))} /></label>
-              <label>Letter spacing<input type="range" min="0" max="12" value={activeLayer.letterSpacing} onChange={(e) => setLayerValue('letterSpacing', Number(e.target.value))} /></label>
-              <div className="two-col">
-                <label>X<input type="range" min="0" max="100" value={activeLayer.x} onChange={(e) => setLayerValue('x', Number(e.target.value))} /></label>
-                <label>Y<input type="range" min="0" max="100" value={activeLayer.y} onChange={(e) => setLayerValue('y', Number(e.target.value))} /></label>
-              </div>
-              <label>Alignment<select value={activeLayer.align} onChange={(e) => setLayerValue('align', e.target.value as 'left' | 'center' | 'right')}>
-                <option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>
-              </select></label>
-              <label className="toggle-row"><input type="checkbox" checked={activeLayer.shadow} onChange={(e) => setLayerValue('shadow', e.target.checked)} /> Shadow</label>
-              {activeLayer.shadow && <label>Shadow color<input type="color" value={activeLayer.shadowColor} onChange={(e) => setLayerValue('shadowColor', e.target.value)} /></label>}
-              <div className="preset-row">
-                <span className="mini-label">Quick presets</span>
-                <div className="preset-buttons">
-                  {textLayerPresets.map((preset) => (
-                    <button type="button" key={preset.name} className="secondary preset-btn" onClick={() => applyLayerPreset(preset.name)}>{preset.name}</button>
-                  ))}
-                </div>
-              </div>
-              <button type="button" className="secondary full" onClick={duplicateSelectedLayer}>Duplicate layer</button>
-            </>
-          )}
+          {activeLayer && <>
+            <label>Text<input value={activeLayer.text} onChange={(e) => setLayerValue('text', e.target.value)} /></label>
+            <label>Color<input type="color" value={activeLayer.color} onChange={(e) => setLayerValue('color', e.target.value)} /></label>
+            <label>Font size<input type="range" min="18" max="110" value={activeLayer.fontSize} onChange={(e) => setLayerValue('fontSize', Number(e.target.value))} /></label>
+            <label>Weight<input type="range" min="300" max="900" step="100" value={activeLayer.fontWeight} onChange={(e) => setLayerValue('fontWeight', Number(e.target.value))} /></label>
+            <label>Opacity<input type="range" min="0.2" max="1" step="0.05" value={activeLayer.opacity} onChange={(e) => setLayerValue('opacity', Number(e.target.value))} /></label>
+            <label>Letter spacing<input type="range" min="0" max="12" value={activeLayer.letterSpacing} onChange={(e) => setLayerValue('letterSpacing', Number(e.target.value))} /></label>
+            <div className="two-col"><label>X<input type="range" min="0" max="100" value={activeLayer.x} onChange={(e) => setLayerValue('x', Number(e.target.value))} /></label><label>Y<input type="range" min="0" max="100" value={activeLayer.y} onChange={(e) => setLayerValue('y', Number(e.target.value))} /></label></div>
+            <label>Alignment<select value={activeLayer.align} onChange={(e) => setLayerValue('align', e.target.value as 'left' | 'center' | 'right')}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
+            <label className="toggle-row"><input type="checkbox" checked={activeLayer.shadow} onChange={(e) => setLayerValue('shadow', e.target.checked)} /> Shadow</label>
+            {activeLayer.shadow && <label>Shadow color<input type="color" value={activeLayer.shadowColor} onChange={(e) => setLayerValue('shadowColor', e.target.value)} /></label>}
+            <div className="preset-row"><span className="mini-label">Quick presets</span><div className="preset-buttons">{textLayerPresets.map((preset) => <button type="button" key={preset.name} className="secondary preset-btn" onClick={() => applyLayerPreset(preset.name)}>{preset.name}</button>)}</div></div>
+            <button type="button" className="secondary full" onClick={duplicateSelectedLayer}>Duplicate layer</button>
+          </>}
         </section>
         <section className="card"><h3>Export</h3><div className="metrics"><div><span>Clips</span><strong>{project.clips.length}</strong></div><div><span>Duration</span><strong>{formatTime(totalDuration)}</strong></div></div><button className="primary full" onClick={exportProject}>Export JSON</button></section>
       </aside>
-
       <main className="workspace">
         <section className="panel preview-panel"><div className="section-header"><div><span className="kicker">Preview</span><h2>{project.projectName}</h2></div><span className="status-pill">{status}</span></div>
-          <div className="stage">
-            {selectedClip?.url ? <video src={selectedClip.url} controls playsInline /> : <div className="empty-stage"><p>No source video loaded.</p><small>Upload a clip or add a demo clip to preview the timeline.</small></div>}
-            {project.textLayers.map((layer) => (
-              <div key={layer.id} className="stage-text-layer" style={{ left: `${layer.x}%`, top: `${layer.y}%`, color: layer.color, fontSize: `${layer.fontSize}px`, fontWeight: layer.fontWeight, opacity: layer.opacity, letterSpacing: `${layer.letterSpacing}px`, textAlign: layer.align, textShadow: layer.shadow ? `0 6px 24px ${layer.shadowColor}` : 'none' }}>
-                {layer.text || 'Your title'}
-              </div>
-            ))}
+          <div className="stage">{selectedClip?.url ? <video src={selectedClip.url} controls playsInline /> : <div className="empty-stage"><p>No source video loaded.</p><small>Upload a clip or add a demo clip to preview the timeline.</small></div>}
+            {project.textLayers.map((layer) => <div key={layer.id} className="stage-text-layer" style={{ left: `${layer.x}%`, top: `${layer.y}%`, color: layer.color, fontSize: `${layer.fontSize}px`, fontWeight: layer.fontWeight, opacity: layer.opacity, letterSpacing: `${layer.letterSpacing}px`, textAlign: layer.align, textShadow: layer.shadow ? `0 6px 24px ${layer.shadowColor}` : 'none' }}>{layer.text || 'Your title'}</div>)}
           </div>
         </section>
         <section className="panel timeline-panel"><div className="section-header"><div><span className="kicker">Timeline</span><h3>Sequence</h3></div><span className="meta">Drag cards to reorder</span></div>
-          <div className="timeline-list">{project.clips.length === 0 ? <div className="empty-state">Your timeline is empty.</div> : project.clips.map((clip, index) => <div key={clip.id} className={`timeline-item ${selectedClipId === clip.id ? 'selected' : ''} ${dropTargetId === clip.id ? 'drop-target' : ''}`} onDragOver={(e) => { e.preventDefault(); setDropTargetId(clip.id); }} onDragLeave={() => setDropTargetId((current) => (current === clip.id ? null : current))} onDrop={(e) => handleDrop(e, clip.id)} onDragStart={(event) => handleDragStart(event, clip.id)} draggable>
-            <div className="clip-summary"><div className="clip-title"><span className="drag-handle" aria-hidden="true">⋮⋮</span><div><strong>{index + 1}. {clip.name}</strong><small>{clip.url ? 'Imported media' : 'Demo media'}</small></div></div>
-            <div className="clip-actions"><button type="button" className="icon-btn" onClick={() => moveClip(clip.id, -1)} disabled={index === 0}>↑</button><button type="button" className="icon-btn" onClick={() => moveClip(clip.id, 1)} disabled={index === project.clips.length - 1}>↓</button><button type="button" className="delete-btn" onClick={() => removeClip(clip.id)}>Delete</button></div></div>
+          <div className="timeline-list">{project.clips.length === 0 ? <div className="empty-state">Your timeline is empty.</div> : project.clips.map((clip, index) => <div key={clip.id} className={`timeline-item ${selectedClipId === clip.id ? 'selected' : ''} ${dropTargetId === clip.id ? 'drop-target' : ''}`} onClick={() => setSelectedClipId(clip.id)} onDragOver={(e) => { e.preventDefault(); setDropTargetId(clip.id); }} onDragLeave={() => setDropTargetId((current) => current === clip.id ? null : current)} onDrop={(e) => handleDrop(e, clip.id)} onDragStart={(event) => handleDragStart(event, clip.id)} draggable>
+            <div className="clip-summary"><div className="clip-title"><span className="drag-handle" aria-hidden="true">⋮⋮</span><div><strong>{index + 1}. {clip.name}</strong><small>{clip.url ? 'Imported media' : 'Demo media'}</small></div></div><div className="clip-actions"><button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); moveClip(clip.id, -1); }} disabled={index === 0}>↑</button><button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); moveClip(clip.id, 1); }} disabled={index === project.clips.length - 1}>↓</button><button type="button" className="delete-btn" onClick={(e) => { e.stopPropagation(); removeClip(clip.id); }}>Delete</button></div></div>
             <div className="trim-group"><label>Start<input type="range" min="0" max={clip.duration} step="0.1" value={clip.trimStart} onChange={(e) => updateTrim(clip.id, 'trimStart', Number(e.target.value))} /><span>{formatTime(clip.trimStart)}</span></label><label>End<input type="range" min="0" max={clip.duration} step="0.1" value={clip.trimEnd} onChange={(e) => updateTrim(clip.id, 'trimEnd', Number(e.target.value))} /><span>{formatTime(clip.trimEnd)}</span></label></div>
           </div>)}</div>
         </section>
